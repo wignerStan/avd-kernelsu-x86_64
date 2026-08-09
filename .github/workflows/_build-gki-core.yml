@@ -580,6 +580,20 @@ jobs:
           echo "KSU_X86_SYSCALL_HARDENING_PATCHED=$KSU_X86_SYSCALL_HARDENING_PATCHED" >> "$GITHUB_ENV"
           echo "KSU_X86_SYSCALL_HARDENING_DEFAULT_OFF=$KSU_X86_SYSCALL_HARDENING_DEFAULT_OFF" >> "$GITHUB_ENV"
 
+      - name: Fix Octal Month Bug (AOSP f9636755)
+        run: |
+          # kleaf: date +'%m' produces '08' which bash treats as octal -> "value too great for base"
+          # AOSP fix (Yifan Hong 2024-08-01, Bug 356719486): use %-m to strip leading zero.
+          cd kernel
+          if [ -f build/kernel/build_utils.sh ]; then
+            sed -i "s/date +'%m'/date +'%-m'/g; s/date +\"%m\"/date +\"%-m\"/g" build/kernel/build_utils.sh
+            echo "Octal month fix applied to build/kernel/build_utils.sh:"
+            grep -n "%\-m" build/kernel/build_utils.sh | head -5
+          else
+            echo "build_utils.sh not found at kernel/build/kernel/build_utils.sh - checking alternates"
+            find . -name "build_utils.sh" -path "*kleaf*" -exec sed -i "s/date +'%m'/date +'%-m'/g; s/date +\"%m\"/date +\"%-m\"/g" {} \; -exec echo "patched: {}" \;
+          fi
+
       - name: Build GKI Kernel
         run: |
           cd kernel
