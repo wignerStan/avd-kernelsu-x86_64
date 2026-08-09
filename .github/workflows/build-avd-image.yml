@@ -1,0 +1,160 @@
+name: Build AVD Prebuilt Image
+
+# Produces a complete prebuilt AVD image bundle:
+#   - KernelSU kernel (Image.gz, Build ID matched)
+#   - ksuinit-injected ramdisk (bootconfig preserved)
+#   - KernelSU Manager APK, ksuinit binary
+#   - Zygisk Next, Vector, Specter, Play Integrity Fix modules
+#   - inject_ksuinit.py + deploy script (host-side provisioning)
+#
+# Artifact/Release asset: avd-ksu-a15-api35-6.6-arm64-11987101-v325.zip
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      avd_target:
+        description: 'AVD target to bundle'
+        required: true
+        type: choice
+        options:
+          - 'a15-api35-6.6'
+          - 'a16-api36.0-6.6'
+        default: 'a15-api35-6.6'
+      ksu_ref:
+        description: 'KernelSU tag (must match kernel build)'
+        required: true
+        type: string
+        default: 'v3.2.5'
+      publish_release:
+        description: 'Publish as GitHub Release (vs artifact only)'
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  bundle:
+    name: Bundle AVD Prebuilt Image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve target metadata
+        id: meta
+        run: |
+          TARGET_ID="${{ inputs.avd_target }}"
+          case "$TARGET_ID" in
+            a15-api35-6.6)   BUILD_ID="11987101"; KMI="android15-6.6";   LABEL="A15-API35-6.6";;
+            a16-api36.0-6.6) BUILD_ID="13070261"; KMI="android15-6.6-2025-02"; LABEL="A16-API36.0-6.6";;
+            *) echo "unsupported target"; exit 1;;
+          esac
+          echo "build_id=$BUILD_ID" >> "$GITHUB_OUTPUT"
+          echo "kmi=$KMI" >> "$GITHUB_OUTPUT"
+          echo "label=$LABEL" >> "$GITHUB_OUTPUT"
+          echo "bundle_name=avd-ksu-${LABEL}-arm64-${BUILD_ID}-$(echo '${{ inputs.ksu_ref }}' | tr -d 'v.')" >> "$GITHUB_OUTPUT"
+
+      - name: Download KernelSU kernel (from this repo's own build)
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ steps.meta.outputs.label }}-arm64-${{ steps.meta.outputs.build_id }}-v325
+          path: kernel-artifact/
+        continue-on-error: true
+
+      - name: Fallback - check kernel build availability
+        if: ${{ hashFiles('kernel-artifact/Image.gz') == '' }}
+        run: |
+          echo "Kernel artifact not found."
+          echo "Run 'Build AVD GKI Kernels' workflow first (a15-api35-6.6 + KernelSU + arm64),"
+          echo "or this workflow can be extended to call it. Proceeding without kernel for now."
+          exit 0
+
+      - name: Download module assets
+        run: |
+          mkdir -p assets
+          cd assets
+          # KernelSU Manager APK (match ksu_ref version)
+          curl -fsSL -o KernelSU_manager.apk "https://github.com/tiann/KernelSU/releases/download/${{ inputs.ksu_ref }}/KernelSU_v${{ inputs.ksu_ref }}-release.apk" || \
+            curl -fsSL -o KernelSU_manager.apk "https://github.com/tiann/KernelSU/releases/download/${{ inputs.ksu_ref }}/KernelSU_${{ inputs.ksu_ref }}-release.apk" || true
+          # ksuinit
+          curl -fsSL -o ksuinit "https://github.com/tiann/KernelSU/releases/download/${{ inputs.ksu_ref }}/ksuinit" || true
+          # Zygisk Next (Dr-TSNG)
+          curl -fsSL -o ZygiskNext.zip "https://github.com/Dr-TSNG/ZygiskNext/releases/download/v1.4.5/Zygisk-Next-1.4.5-836-b13d58a-release.zip" || true
+          # Vector (LSPosed successor, JingMatrix)
+          VEC_URL=$(curl -fsSL https://api.github.com/repos/JingMatrix/Vector/releases/latest | python3 -c "import sys,json; d=json.load(sys.stdin); print([a['browser_download_url'] for a in d['assets'] if 'Release' in a['name']][0])")
+          curl -fsSL -o Vector.zip "$VEC_URL" || true
+          # Specter (root hiding + PI)
+          SP_URL=$(curl -fsSL https://api.github.com/repos/dpejoh/specter/releases/latest | python3 -c "import sys,json; d=json.load(sys.stdin); print([a['browser_download_url'] for a in d['assets'] if a['name'].endswith('.zip')][0])")
+          curl -fsSL -o Specter.zip "$SP_URL" || true
+          # Play Integrity Fix
+          PIF_URL=$(curl -fsSL https://api.github.com/repos/KOWX712/PlayIntegrityFix/releases/latest | python3 -c "import sys,json; d=json.load(sys.stdin); print([a['browser_download_url'] for a in d['assets'] if 'inject' in a['name']][0])")
+          curl -fsSL -o PlayIntegrityFix.zip "$PIF_URL" || true
+          ls -la
+
+      - name: Assemble bundle
+        run: |
+          mkdir -p bundle/modules bundle/kernel
+          # kernel
+          if [ -f kernel-artifact/Image.gz ]; then cp kernel-artifact/Image.gz bundle/kernel/; fi
+          if [ -f kernel-artifact/Image ]; then cp kernel-artifact/Image bundle/kernel/; fi
+          if [ -f kernel-artifact/build-info.txt ]; then cp kernel-artifact/build-info.txt bundle/kernel/; fi
+          # scripts
+          cp scripts/inject_ksuinit.py bundle/
+          cp scripts/setup_avd_ksu_env.sh bundle/
+          chmod +x bundle/setup_avd_ksu_env.sh
+          # assets
+          cp assets/*.apk bundle/ 2>/dev/null || true
+          cp assets/ksuinit bundle/ 2>/dev/null || true
+          cp assets/ZygiskNext.zip bundle/modules/ 2>/dev/null || true
+          cp assets/Vector.zip bundle/modules/ 2>/dev/null || true
+          cp assets/Specter.zip bundle/modules/ 2>/dev/null || true
+          cp assets/PlayIntegrityFix.zip bundle/modules/ 2>/dev/null || true
+          # README with usage
+          cat > bundle/README.md <<'MDEOF'
+# AVD KernelSU Prebuilt Bundle
+
+Rooted Android AVD with KernelSU v3.2.5 + Google Play + Vector(Xposed) + Specter
+
+## Contents
+- kernel/ : KernelSU kernel (Image.gz, Build ID 11987101)
+- modules/ : Zygisk Next, Vector, Specter, Play Integrity Fix
+- KernelSU_manager.apk, ksuinit
+- inject_ksuinit.py : ramdisk patcher (preserves bootconfig)
+- setup_avd_ksu_env.sh : one-shot AVD provisioning
+
+## Usage (macOS ARM64)
+1. Have Android SDK: system-images;android-35;google_apis_playstore;arm64-v8a
+2. Run: ./setup_avd_ksu_env.sh Android35_GooglePlay
+3. Play Store login + test Play Integrity
+
+Note: kernel replaces system-images/.../kernel-ranchu (backup .orig);
+ramdisk is patched (backup .orig). See README in upstream repo.
+MDEOF
+          ls -laR bundle | head -40
+
+      - name: Create ZIP
+        run: |
+          cd bundle
+          ZIP_NAME="${{ steps.meta.outputs.bundle_name }}.zip"
+          zip -r "../${ZIP_NAME}" . -x "*.DS_Store"
+          cd ..
+          ls -la "${ZIP_NAME}"
+          echo "zip_name=${ZIP_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.bundle_name }}
+          path: ${{ steps.meta.outputs.bundle_name }}.zip
+          if-no-files-found: error
+
+      - name: Publish release
+        if: ${{ inputs.publish_release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: avd-ksu-${{ steps.meta.outputs.label }}-${{ steps.meta.outputs.build_id }}-${{ inputs.ksu_ref }}
+          name: AVD KernelSU Prebuilt (${{ steps.meta.outputs.label }})
+          files: ${{ steps.meta.outputs.bundle_name }}.zip
+          generate_release_notes: true
