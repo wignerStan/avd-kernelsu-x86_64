@@ -23,7 +23,7 @@ on:
         description: 'KernelSU / KernelSU-Next tag, commit, or auto for per-target defaults'
         required: true
         type: string
-        default: 'auto'
+        default: 'v3.2.5'
       ksu_variant:
         description: 'KernelSU variant'
         required: true
