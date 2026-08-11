@@ -113,6 +113,23 @@ emulator -avd <Your_AVD_Name> -memory 4096 -kernel C:\path\to\your\downloaded\bz
 
 ---
 
+## Provisioning & Helper Scripts
+
+The `scripts/` directory holds the provisioning tools for setting up a rooted AVD with KernelSU. The bundle workflow (`build-avd-image.yml`) copies `inject_ksuinit.py` and `setup_avd_ksu_env.sh` into the image bundle automatically; the rest are for manual/local use.
+
+| Script | Purpose |
+| :--- | :--- |
+| `inject_ksuinit.py` | Injects `ksuinit` into an AVD ramdisk (cpio) so the emulator boots with KernelSU init. |
+| `setup_avd_ksu_env.sh` | One-shot AVD environment setup: pulls the prebuilt KSU kernel + ramdisk, injects `ksuinit`, prepares launch arguments. |
+| `repack-ramdisk.py` | Repacks an AVD ramdisk with matching KernelSU kernel modules (vermagic-compatible), for images whose stock ramdisk does not already include them. |
+| `extract_app_data.py` | Extracts a single app's data directory from a raw ext4 image (app analysis / forensics). |
+| `extract_sqlite.py` | Extracts contiguous SQLite databases from a raw disk image (page-aligned scan from the header page count). |
+| `writable-overlay/` | KernelSU module that bind-mounts paths over `/system` to make read-only (erofs / dm) AVDs writable — see its `README.md`. |
+
+Note: `*.zip` is gitignored, so build `writable-overlay.zip` from the `writable-overlay/` sources locally when needed.
+
+---
+
 ## Credits
 
 - Workflow structure and release packaging ideas were inspired by [nzaar9/avd-kernelsu](https://github.com/nzaar9/avd-kernelsu), an AVD KernelSU builder for Android 14/15/16.

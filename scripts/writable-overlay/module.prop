@@ -1,0 +1,6 @@
+id=writable-overlay
+name=Writable System Overlay (PlayStore/EROFS)
+version=v1.0
+versionCode=1
+author=workbuddy
+description=Boot-time overlay mount that makes the EROFS read-only /system appear writable. Writes land in /data/adb/writable-overlay/upper and survive reboots. SELinux permissive during mount.
